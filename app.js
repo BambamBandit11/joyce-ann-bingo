@@ -1,8 +1,9 @@
-(() => {
+(function () {
   'use strict';
 
-  // ========== Phrases ==========
-  const PHRASES = [
+  // ===== Phrases =====
+  // The first 12 are mandatory. The rest fill the pool to 30+.
+  var ALL_PHRASES = [
     'physical appearance',
     'house cleanliness',
     'eye brows',
@@ -34,283 +35,309 @@
     'loud chewing',
     '"bless your heart"',
     'unsolicited advice',
+    'suspicious casserole',
     'someone whispers',
-    'kitchen disaster',
-    'family secret dropped',
-    'outfit change',
+    'eye roll',
+    'nervous laughter',
   ];
 
-  // ========== Seeded PRNG (mulberry32) ==========
+  // ===== Seeded PRNG (mulberry32) =====
   function mulberry32(seed) {
     return function () {
       seed |= 0;
       seed = (seed + 0x6d2b79f5) | 0;
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
 
-  function shuffleArray(arr, rng) {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
+  // Shuffle an array in place using the seeded RNG.
+  function shuffle(arr, rng) {
+    for (var i = arr.length - 1; i > 0; i--) {
+      var j = Math.floor(rng() * (i + 1));
+      var tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
     }
-    return a;
+    return arr;
   }
 
-  // ========== Seed Management ==========
+  // ===== Seed Management =====
   function getSeed() {
-    const params = new URLSearchParams(window.location.search);
-    let seed = parseInt(params.get('seed'), 10);
-    if (isNaN(seed)) {
-      seed = Math.floor(Math.random() * 1000000);
-      setSeedInURL(seed);
+    var params = new URLSearchParams(window.location.search);
+    var raw = params.get('seed');
+    if (raw !== null) {
+      var n = parseInt(raw, 10);
+      if (!isNaN(n)) return n;
     }
-    return seed;
+    return null;
+  }
+
+  function generateSeed() {
+    return Math.floor(Math.random() * 2147483647) + 1;
   }
 
   function setSeedInURL(seed) {
-    const url = new URL(window.location);
+    var url = new URL(window.location.href);
     url.searchParams.set('seed', seed);
-    window.history.replaceState({}, '', url);
+    window.history.replaceState(null, '', url.toString());
   }
 
-  // ========== Board Generation ==========
+  // ===== Board Generation =====
+  // Returns an array of 25 phrases where index 12 is "FREE".
   function generateBoard(seed) {
-    const rng = mulberry32(seed);
-    const shuffled = shuffleArray(PHRASES, rng);
-    const selected = shuffled.slice(0, 24);
-    // Insert FREE at center (index 12)
-    selected.splice(12, 0, 'FREE');
-    return selected;
+    var rng = mulberry32(seed);
+    var pool = ALL_PHRASES.slice();
+    shuffle(pool, rng);
+    var picked = pool.slice(0, 24);
+    // Insert FREE at center (index 12).
+    picked.splice(12, 0, 'FREE');
+    return picked;
   }
 
-  // ========== LocalStorage Helpers ==========
+  // ===== LocalStorage Helpers =====
+  var STORAGE_NAME_KEY = 'joyce-ann-bingo-player';
+
   function getPlayerName() {
-    return localStorage.getItem('bingo_player_name') || '';
+    return localStorage.getItem(STORAGE_NAME_KEY) || '';
   }
 
   function setPlayerName(name) {
-    localStorage.setItem('bingo_player_name', name);
+    localStorage.setItem(STORAGE_NAME_KEY, name);
   }
 
-  function getMarkedKey(seed) {
-    return `bingo_marked_${seed}`;
+  function marksKey(seed) {
+    return 'joyce-ann-bingo-marks-' + seed;
   }
 
-  function getMarkedState(seed) {
+  function loadMarks(seed) {
     try {
-      const raw = localStorage.getItem(getMarkedKey(seed));
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
+      var raw = localStorage.getItem(marksKey(seed));
+      if (raw) return JSON.parse(raw);
+    } catch (_) {
+      // Ignore parse errors.
     }
+    return {};
   }
 
-  function saveMarkedState(seed, state) {
-    localStorage.setItem(getMarkedKey(seed), JSON.stringify(state));
+  function saveMarks(seed, marks) {
+    localStorage.setItem(marksKey(seed), JSON.stringify(marks));
   }
 
-  // ========== Bingo Detection ==========
-  function checkBingo(marked) {
-    const grid = [];
-    for (let r = 0; r < 5; r++) {
-      grid.push([]);
-      for (let c = 0; c < 5; c++) {
-        const idx = r * 5 + c;
-        grid[r].push(!!marked[idx]);
+  // ===== Bingo Detection =====
+  // marks is an object mapping index (string) -> true.
+  // Index 12 (FREE) is always marked.
+  function checkBingo(marks) {
+    var lines = [
+      // Rows
+      [0, 1, 2, 3, 4],
+      [5, 6, 7, 8, 9],
+      [10, 11, 12, 13, 14],
+      [15, 16, 17, 18, 19],
+      [20, 21, 22, 23, 24],
+      // Columns
+      [0, 5, 10, 15, 20],
+      [1, 6, 11, 16, 21],
+      [2, 7, 12, 17, 22],
+      [3, 8, 13, 18, 23],
+      [4, 9, 14, 19, 24],
+      // Diagonals
+      [0, 6, 12, 18, 24],
+      [4, 8, 12, 16, 20],
+    ];
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var complete = true;
+      for (var j = 0; j < line.length; j++) {
+        if (!marks[String(line[j])]) {
+          complete = false;
+          break;
+        }
       }
+      if (complete) return true;
     }
-
-    // Rows
-    for (let r = 0; r < 5; r++) {
-      if (grid[r].every(Boolean)) return true;
-    }
-    // Columns
-    for (let c = 0; c < 5; c++) {
-      if (grid.every(row => row[c])) return true;
-    }
-    // Diagonals
-    if ([0, 1, 2, 3, 4].every(i => grid[i][i])) return true;
-    if ([0, 1, 2, 3, 4].every(i => grid[i][4 - i])) return true;
-
     return false;
   }
 
-  // ========== Confetti ==========
+  // ===== Confetti =====
   function spawnConfetti(container) {
     container.innerHTML = '';
-    const colors = ['#e8594f', '#f4a623', '#6c8ebf', '#82c991', '#e86fbf', '#f0e040'];
-    for (let i = 0; i < 60; i++) {
-      const el = document.createElement('div');
-      el.classList.add('confetti');
-      el.style.left = Math.random() * 100 + '%';
-      el.style.background = colors[Math.floor(Math.random() * colors.length)];
-      el.style.animationDuration = (1.5 + Math.random() * 2) + 's';
-      el.style.animationDelay = Math.random() * 0.8 + 's';
-      el.style.width = (6 + Math.random() * 8) + 'px';
-      el.style.height = (6 + Math.random() * 8) + 'px';
-      container.appendChild(el);
+    var colors = [
+      '#f582ae', '#ffc857', '#8bd3dd', '#6bcb77',
+      '#ff6b6b', '#a76bff', '#ff9a3c',
+    ];
+    for (var i = 0; i < 60; i++) {
+      var piece = document.createElement('div');
+      piece.className = 'confetti-piece';
+      piece.style.left = Math.random() * 100 + '%';
+      piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+      piece.style.width = (6 + Math.random() * 8) + 'px';
+      piece.style.height = (6 + Math.random() * 8) + 'px';
+      piece.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+      piece.style.animationDuration = (1.5 + Math.random() * 2) + 's';
+      piece.style.animationDelay = (Math.random() * 1.5) + 's';
+      container.appendChild(piece);
     }
   }
 
-  // ========== Toast ==========
-  function showToast(msg) {
-    const toast = document.getElementById('toast');
-    toast.textContent = msg;
+  // ===== Toast =====
+  function showToast(message) {
+    var toast = document.getElementById('toast');
+    toast.textContent = message;
     toast.classList.remove('hidden');
     clearTimeout(showToast._timer);
-    showToast._timer = setTimeout(() => toast.classList.add('hidden'), 2200);
+    showToast._timer = setTimeout(function () {
+      toast.classList.add('hidden');
+    }, 2000);
   }
 
-  // ========== App Init ==========
+  // ===== App Init =====
   function init() {
-    const seed = getSeed();
-    const nameModal = document.getElementById('name-modal');
-    const bingoModal = document.getElementById('bingo-modal');
-    const app = document.getElementById('app');
-    const nameInput = document.getElementById('name-input');
-    const nameSubmit = document.getElementById('name-submit');
-    const playerDisplay = document.getElementById('player-display');
-    const boardEl = document.getElementById('board');
-    const copyLinkBtn = document.getElementById('copy-link');
-    const callBingoBtn = document.getElementById('call-bingo');
-    const newGameBtn = document.getElementById('new-game');
-    const resetBtn = document.getElementById('reset-board');
-    const bingoCloseBtn = document.getElementById('bingo-close');
-    const bingoMessage = document.getElementById('bingo-message');
-    const confettiContainer = document.getElementById('confetti-container');
-
-    let playerName = getPlayerName();
-    let marked = getMarkedState(seed);
-    let bingoAlerted = false;
-
-    // Always mark FREE space
-    marked[12] = true;
-
-    // ---- Name Modal ----
-    function showNameModal() {
-      nameModal.classList.remove('hidden');
-      app.classList.add('hidden');
-      nameInput.value = playerName;
-      setTimeout(() => nameInput.focus(), 100);
+    var seed = getSeed();
+    if (seed === null) {
+      seed = generateSeed();
+      setSeedInURL(seed);
     }
 
-    function submitName() {
-      const name = nameInput.value.trim();
-      if (!name) {
-        nameInput.focus();
-        return;
-      }
-      playerName = name;
-      setPlayerName(name);
+    var nameModal = document.getElementById('name-modal');
+    var nameInput = document.getElementById('name-input');
+    var nameSubmit = document.getElementById('name-submit');
+    var bingoModal = document.getElementById('bingo-modal');
+    var bingoMessage = document.getElementById('bingo-message');
+    var bingoClose = document.getElementById('bingo-close');
+    var confettiContainer = document.getElementById('confetti-container');
+    var appEl = document.getElementById('app');
+    var playerDisplay = document.getElementById('player-display');
+    var boardEl = document.getElementById('bingo-board');
+
+    var playerName = getPlayerName();
+    var marks = loadMarks(seed);
+    // FREE space is always marked.
+    marks['12'] = true;
+
+    var board = generateBoard(seed);
+
+    // --- Name Modal ---
+    function finishNameEntry() {
+      var val = nameInput.value.trim();
+      if (!val) return;
+      playerName = val;
+      setPlayerName(playerName);
       nameModal.classList.add('hidden');
-      app.classList.remove('hidden');
-      playerDisplay.textContent = `Playing as ${playerName}`;
-      renderBoard();
+      appEl.classList.remove('hidden');
+      playerDisplay.textContent = 'Player: ' + playerName;
     }
 
-    if (!playerName) {
-      showNameModal();
+    if (playerName) {
+      nameModal.classList.add('hidden');
+      appEl.classList.remove('hidden');
+      playerDisplay.textContent = 'Player: ' + playerName;
     } else {
-      nameModal.classList.add('hidden');
-      app.classList.remove('hidden');
-      playerDisplay.textContent = `Playing as ${playerName}`;
-      renderBoard();
+      nameModal.classList.remove('hidden');
+      appEl.classList.add('hidden');
+      setTimeout(function () { nameInput.focus(); }, 100);
     }
 
-    nameSubmit.addEventListener('click', submitName);
-    nameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submitName();
+    nameSubmit.addEventListener('click', finishNameEntry);
+    nameInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') finishNameEntry();
     });
 
-    // ---- Board Rendering ----
+    // --- Render Board ---
     function renderBoard() {
-      const phrases = generateBoard(seed);
       boardEl.innerHTML = '';
+      for (var i = 0; i < 25; i++) {
+        var cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.textContent = board[i];
+        cell.dataset.index = i;
 
-      phrases.forEach((phrase, idx) => {
-        const cell = document.createElement('div');
-        cell.classList.add('cell');
-        cell.textContent = phrase;
-
-        if (idx === 12) {
-          cell.classList.add('free', 'marked');
-        } else if (marked[idx]) {
+        if (i === 12) {
+          cell.classList.add('free');
+          cell.classList.add('marked');
+        } else if (marks[String(i)]) {
           cell.classList.add('marked');
         }
 
-        cell.addEventListener('click', () => {
-          if (idx === 12) return; // FREE space
-          if (marked[idx]) {
-            delete marked[idx];
-            cell.classList.remove('marked');
-          } else {
-            marked[idx] = true;
-            cell.classList.add('marked');
-          }
-          saveMarkedState(seed, marked);
-
-          if (!bingoAlerted && checkBingo(marked)) {
-            bingoAlerted = true;
-            showBingoModal();
-          }
-        });
-
+        cell.addEventListener('click', onCellClick);
         boardEl.appendChild(cell);
-      });
+      }
     }
 
-    // ---- Bingo Modal ----
-    function showBingoModal() {
-      bingoMessage.textContent = `${playerName}, you got BINGO! 🎉`;
+    function onCellClick(e) {
+      var idx = e.currentTarget.dataset.index;
+      if (idx === '12') return; // Cannot toggle FREE.
+
+      if (marks[idx]) {
+        delete marks[idx];
+        e.currentTarget.classList.remove('marked');
+      } else {
+        marks[idx] = true;
+        e.currentTarget.classList.add('marked');
+      }
+
+      saveMarks(seed, marks);
+
+      if (checkBingo(marks)) {
+        showBingoCelebration();
+      }
+    }
+
+    renderBoard();
+
+    // --- Bingo Celebration ---
+    function showBingoCelebration() {
+      bingoMessage.textContent = 'BINGO, ' + playerName + '! \uD83C\uDF89';
       bingoModal.classList.remove('hidden');
       spawnConfetti(confettiContainer);
     }
 
-    bingoCloseBtn.addEventListener('click', () => {
+    bingoClose.addEventListener('click', function () {
       bingoModal.classList.add('hidden');
     });
 
-    // ---- Toolbar Actions ----
-    copyLinkBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(window.location.href).then(() => {
-        showToast('Game link copied!');
-      }).catch(() => {
-        // Fallback
-        const ta = document.createElement('textarea');
-        ta.value = window.location.href;
+    // --- Toolbar Buttons ---
+    document.getElementById('btn-copy-link').addEventListener('click', function () {
+      var url = window.location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () {
+          showToast('Link copied!');
+        });
+      } else {
+        // Fallback for older browsers.
+        var ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-        showToast('Game link copied!');
-      });
+        showToast('Link copied!');
+      }
     });
 
-    callBingoBtn.addEventListener('click', () => {
-      showBingoModal();
-    });
-
-    newGameBtn.addEventListener('click', () => {
-      const newSeed = Math.floor(Math.random() * 1000000);
-      const url = new URL(window.location);
+    document.getElementById('btn-new-game').addEventListener('click', function () {
+      var newSeed = generateSeed();
+      var url = new URL(window.location.href);
       url.searchParams.set('seed', newSeed);
       window.location.href = url.toString();
     });
 
-    resetBtn.addEventListener('click', () => {
-      marked = { 12: true };
-      saveMarkedState(seed, marked);
-      bingoAlerted = false;
+    document.getElementById('btn-reset').addEventListener('click', function () {
+      marks = { '12': true };
+      saveMarks(seed, marks);
       renderBoard();
-      showToast('Board reset!');
+    });
+
+    document.getElementById('btn-call-bingo').addEventListener('click', function () {
+      showBingoCelebration();
     });
   }
 
-  // Start app when DOM is ready
+  // Start the app once the DOM is ready.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
